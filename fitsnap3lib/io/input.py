@@ -88,6 +88,8 @@ class Config(metaclass=Singleton):
                             default=None, help="Write fitsnap log to this file.")
         parser.add_argument("--screen2file", "-s2f", action="store", dest="screen2file",
                             default=None, help="Print screen to a file")
+        parser.add_argument("--nofit_trainingcheck", "-nftc", action="store_true", dest="nofit_trainingcheck",
+                            help="Don't perform fit, just output training file names.")
 
         # Not Implemented.
         """
