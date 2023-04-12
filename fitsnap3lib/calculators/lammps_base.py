@@ -158,6 +158,8 @@ class LammpsBase(Calculator):
         self._lmp.command(f"create_box {numtypes} pybox")
 
     def _create_atoms_helper(self, type_mapping):
+        group = self._data["Group"]
+        file_name = self._data["File"]
         number_of_atoms = len(self._data["AtomTypes"])
         positions = self._data["Positions"].flatten()
         elem_all = [type_mapping[a_t] for a_t in self._data["AtomTypes"]]
@@ -171,19 +173,24 @@ class LammpsBase(Calculator):
             shrinkexceed=False
         )
         n_atoms = int(self._lmp.get_natoms())
-        assert number_of_atoms == n_atoms, f"Atom counts don't match when creating atoms: {number_of_atoms}, {n_atoms}"
+        assert number_of_atoms == n_atoms, f"Atom counts don't match when creating atoms: {number_of_atoms}, {n_atoms}\n\tGroup, file name: {group}/{file_name}"
 
     def _create_spins(self):
+        group = self._data["Group"]
+        file_name = self._data["File"]
+        file_name = self._data["File"]
         for i, (s_mag, s_x, s_y, s_z) in enumerate(self._data["Spins"]):
             self._lmp.command(f"set atom {i + 1} spin {s_mag:20.20g} {s_x:20.20g} {s_y:20.20g} {s_z:20.20g} ")
         n_atoms = int(self._lmp.get_natoms())
-        assert i + 1 == n_atoms, f"Atom counts don't match when assigning spins: {i + 1}, {n_atoms}"
+        assert i + 1 == n_atoms, f"Atom counts don't match when assigning spins: {i + 1}, {n_atoms}\n\tGroup, file name: {group}/{file_name}"
 
     def _create_charge(self):
+        group = self._data["Group"]
+        file_name = self._data["File"]
         for i, q in enumerate(self._data["Charges"]):
             self._lmp.command(f"set atom {i + 1} charge {q[0]:20.20g} ")
         n_atoms = int(self._lmp.get_natoms())
-        assert i + 1 == n_atoms, f"Atom counts don't match when assigning charge: {i + 1}, {n_atoms}"
+        assert i + 1 == n_atoms, f"Atom counts don't match when assigning charge: {i + 1}, {n_atoms}\n\tGroup, file name: {group}/{file_name}"
 
     def _set_variables(self, **lmp_variable_args):
         for k, v in lmp_variable_args.items():
