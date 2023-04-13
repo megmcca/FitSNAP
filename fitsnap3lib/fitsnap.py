@@ -120,6 +120,9 @@ class FitSnap:
             if (self.solver.linear):
                 self.calculator.extras()
 
+            if self.config.args.nofit_trainingcheck:
+                self.calculator.check_training_data()
+
         decorated_process_configs()
 
     #@pt.single_timeit 
