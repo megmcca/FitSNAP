@@ -366,7 +366,7 @@ class Calculator:
                         all_output.append(row_config)
                     del df_row_type
 
-            # Consolidate and condition
+            # Consolidate
             df_out = pd.DataFrame.from_records(all_output, columns=all_header)
             df_configs = df_out.loc[(df_out.Configs != 'all'),:]
 
@@ -377,7 +377,7 @@ class Calculator:
             df_out_csv_funky = 'NoFit_TrainingCheck_funky.csv'
             df_out_md = 'NoFit_TrainingCheck_v0.md'
             df_out.to_csv(df_out_csv_all, index=False)
-            df_funky.to_csv(df_out_csv_funky, index=False)
+            # df_funky.to_csv(df_out_csv_funky, index=False)
             print("Data written, training set check complete")
             del df
         decorated_check_training_data()
