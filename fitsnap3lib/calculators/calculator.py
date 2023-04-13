@@ -307,6 +307,11 @@ class Calculator:
             # Currently only run if the '-nofit_trainingcheck' flag is used in the command line.
             # Executed in fitsnap.py.
             # 'Version 0' (this one) outputs two CSV files: one with statistical analysis performed on forces and energies 
+
+            print("Command line flag '-nofit_trainingcheck' used, checking training data statistics (in beta!)")
+            print("Current analysis type: quartiles")
+            print("Processing data...")
+
             pt = ParallelTools()
 
             # Grab relevant data from shared arrays/dicts and create base dataframe
@@ -321,7 +326,7 @@ class Calculator:
             make_zero_if_tiny = lambda x: 0.0 if abs(x) < 10e-7 else x
             
             # Get user checking/fitting choices from calculator section of input file  
-            chosen_row_types = [self.config.sections['CALCULATOR'].energy, self.config.sections['CALCULATOR'].force, self.config.sections['CALCULATOR'].stress]
+            chosen_row_types = [bool(val) for val in [self.config.sections['CALCULATOR'].energy, self.config.sections['CALCULATOR'].force, self.config.sections['CALCULATOR'].stress]]
 
             for i, row_type in enumerate('Energy Force Stress'.split()):
                 # If energy, force, or stress data are chosen in input file, perform that analysis
@@ -335,40 +340,45 @@ class Calculator:
                     hi_q_all = vals_row_type[6]
                     is_funky_all = self._check_funkiness_quartiles(mean_all, lo_q_all, hi_q_all)
                     str_row = ' '.join([str(v) for v in vals_row_type])
-                    data_row_all =  f'all all {row_type} {str_row} {is_funky_all} None'.split()
+                    data_row_all =  f'all all {row_type} {str_row}'.split() + [is_funky_all, False]
                     all_output.append(data_row_all)
 
                     # Per group/atom_type, also collect per-group quartile data to compare configs to
                     # group_quartiles = [] # df version
                     group_quartiles = {}
-                    for name, group in df_row_type.groupby('Groups'):
-                        vals_group = group.truths.describe().values.tolist()
+                    for label, subset in df_row_type.groupby('Groups'):
+                        vals_group = subset.truths.describe().values.tolist()
                         mean_group, lo_q_group, hi_q_group = make_zero_if_tiny(vals_group[1]), vals_group[4], vals_group[6]
                         # group_quartiles.append((name[0], name[1], lo_q_group, hi_q_group))
-                        group_quartiles[name] = (lo_q_group, hi_q_group)
-                        is_funky_all = self._check_funkiness_quartiles(mean_group, lo_q_all, hi_q_all, name)
-                        row_group = [name[0], 'all', row_type] + vals_group + [is_funky_all, None]
+                        group_quartiles[label] = (lo_q_group, hi_q_group)
+                        is_funky_all = self._check_funkiness_quartiles(mean_group, lo_q_all, hi_q_all)
+                        row_group = [label, 'all', row_type] + vals_group + [is_funky_all, False]
                         all_output.append(row_group)
 
                     # Per config with comparison to group quartiles
-                    for name, group in df_row_type.groupby('Groups Configs'.split()):
-                        vals_config = group.truths.describe().values.tolist()
+                    for label, subset in df_row_type.groupby('Groups Configs'.split()):
+                        vals_config = subset.truths.describe().values.tolist()
                         mean_config = make_zero_if_tiny(vals_config[1])
-                        is_funky_all = self._check_funkiness_quartiles(mean_config, lo_q_all, hi_q_all, name)
-                        lo_q_group, hi_q_group = group_quartiles[name[0]]
-                        is_funky_group = self._check_funkiness_quartiles(mean_config, lo_q_group, hi_q_group, name)
-                        row_config = [name[0], name[1], row_type] + vals_config + [is_funky_all, is_funky_group]
+                        is_funky_all = self._check_funkiness_quartiles(mean_config, lo_q_all, hi_q_all)
+                        lo_q_group, hi_q_group = group_quartiles[label[0]]
+                        is_funky_group = self._check_funkiness_quartiles(mean_config, lo_q_group, hi_q_group)
+                        row_config = [label[0], label[1], row_type] + vals_config + [is_funky_all, is_funky_group]
                         all_output.append(row_config)
                     del df_row_type
 
-            # Consolidate
+            # Consolidate and condition
             df_out = pd.DataFrame.from_records(all_output, columns=all_header)
-            
+            df_configs = df_out.loc[(df_out.Configs != 'all'),:]
+
             # Output data 
-            df_out_csv = 'NoFit_TrainingCheck_v0.csv'
+            print("... analysis complete!")
+            print("Writing CSVs...")
+            df_out_csv_all = 'NoFit_TrainingCheck_all.csv'
+            df_out_csv_funky = 'NoFit_TrainingCheck_funky.csv'
             df_out_md = 'NoFit_TrainingCheck_v0.md'
-            df_out.to_csv(df_out_csv, index=False)
-            print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            df_out.to_csv(df_out_csv_all, index=False)
+            df_funky.to_csv(df_out_csv_funky, index=False)
+            print("Data written, training set check complete")
             del df
         decorated_check_training_data()
 
