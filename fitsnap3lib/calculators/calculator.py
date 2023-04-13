@@ -310,15 +310,15 @@ class Calculator:
             pt = ParallelTools()
 
             # Grab relevant data from shared arrays/dicts and create base dataframe
-            file_id_keys = 'Groups Configs Atom_Type Row_Type'.split()
+            file_id_keys = 'Groups Configs Row_Type'.split()
             df = pd.DataFrame.from_dict({key:pt.fitsnap_dict[key] for key in file_id_keys})
             df['truths'] = pt.shared_arrays['b'].array.tolist()
 
             # Set up output
             all_output = []
             descr_cols = 'count mean std min 25th 50th 75th max'
-            all_header = f'Groups Configs Atom_Type Row_Type {descr_cols} is_funky_all is_funky_group'.split()
-            lex_sort = lambda x: int("".join([c for c in x.split('_')[-1].replace(".json",'').split() if c.isdigit()]))
+            all_header = f'Groups Configs Row_Type {descr_cols} is_funky_all is_funky_group'.split()
+            make_zero_if_tiny = lambda x: 0.0 if abs(x) < 10e-7 else x
             
             # Get user checking/fitting choices from calculator section of input file  
             chosen_row_types = [self.config.sections['CALCULATOR'].energy, self.config.sections['CALCULATOR'].force, self.config.sections['CALCULATOR'].stress]
@@ -329,41 +329,36 @@ class Calculator:
                     # Collect data for entire dataset for row type
                     df_row_type = df.loc[df.Row_Type == row_type,:]
                     vals_row_type = df_row_type.truths.describe().values
-                    mean_all = vals_row_type[1]
+                    mean_all = make_zero_if_tiny(vals_row_type[1])
                     std_all = vals_row_type[2]
                     lo_q_all = vals_row_type[4]
                     hi_q_all = vals_row_type[6]
                     is_funky_all = self._check_funkiness_quartiles(mean_all, lo_q_all, hi_q_all)
                     str_row = ' '.join([str(v) for v in vals_row_type])
-                    data_row_all =  f'all all all {row_type} {str_row} {is_funky_all} None'.split()
+                    data_row_all =  f'all all {row_type} {str_row} {is_funky_all} None'.split()
                     all_output.append(data_row_all)
-
-                    # Gather stat. values for per-group and per-config comparisons
 
                     # Per group/atom_type, also collect per-group quartile data to compare configs to
                     # group_quartiles = [] # df version
                     group_quartiles = {}
-                    for name, group in df_row_type.groupby('Groups Atom_Type'.split()):
+                    for name, group in df_row_type.groupby('Groups'):
                         vals_group = group.truths.describe().values.tolist()
-                        mean_group, lo_q_group, hi_q_group = vals_group[1], vals_group[4], vals_group[6]
+                        mean_group, lo_q_group, hi_q_group = make_zero_if_tiny(vals_group[1]), vals_group[4], vals_group[6]
                         # group_quartiles.append((name[0], name[1], lo_q_group, hi_q_group))
-                        group_quartiles[f'{name[0]}_{name[1]}'] = (lo_q_group, hi_q_group)
+                        group_quartiles[name] = (lo_q_group, hi_q_group)
                         is_funky_all = self._check_funkiness_quartiles(mean_group, lo_q_all, hi_q_all, name)
-                        row_group = [name[0], 'all', name[1], row_type] + vals_group + [is_funky_all, None]
+                        row_group = [name[0], 'all', row_type] + vals_group + [is_funky_all, None]
                         all_output.append(row_group)
 
                     # Per config with comparison to group quartiles
-                    for name, group in df_row_type.groupby('Groups Configs Atom_Type'.split()):
+                    for name, group in df_row_type.groupby('Groups Configs'.split()):
                         vals_config = group.truths.describe().values.tolist()
-                        mean_config= vals_config[1]
+                        mean_config = make_zero_if_tiny(vals_config[1])
                         is_funky_all = self._check_funkiness_quartiles(mean_config, lo_q_all, hi_q_all, name)
-                        # df_group_funk = df_groups.loc[(df_groups.Groups == name[0])&(df_groups.Atom_Type == name[2]),:]
-                        lo_q_group, hi_q_group = group_quartiles[f'{name[0]}_{name[2]}']
+                        lo_q_group, hi_q_group = group_quartiles[name[0]]
                         is_funky_group = self._check_funkiness_quartiles(mean_config, lo_q_group, hi_q_group, name)
-                        row_config = [name[0], name[1], name[2], row_type] + vals_config + [is_funky_all, is_funky_group]
+                        row_config = [name[0], name[1], row_type] + vals_config + [is_funky_all, is_funky_group]
                         all_output.append(row_config)
-                    
-                    # Clean up data
                     del df_row_type
 
             # Consolidate
@@ -378,11 +373,10 @@ class Calculator:
         decorated_check_training_data()
 
     def _check_funkiness_quartiles(self, mean, lo_q, hi_q, label=''):
-        # print("Name: ", label)
-        # print(mean, lo_q, hi_q)
         # If the mean is not within the 2nd or 3rd quartiles of the queried aggregated data, it's funky (in a bad way)
         if mean < lo_q or mean > hi_q:
             return True
+        
         # Implement more sophisticated tests and return statements here
         return False
 
