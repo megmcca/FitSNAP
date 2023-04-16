@@ -6,7 +6,7 @@ from fitsnap3lib.io.sections.calculator_sections.calculator import Calculator
 from fitsnap3lib.io.sections.calculator_sections.ace import Ace
 from fitsnap3lib.io.sections.calculator_sections.basic_calculator import Basic
 from fitsnap3lib.io.sections.calculator_sections.custom import Custom
-from fitsnap3lib.io.sections.check_training import CheckTraining
+from fitsnap3lib.io.sections.checktraining import CheckTraining
 from fitsnap3lib.io.sections.eshift import Eshift
 from fitsnap3lib.io.sections.trainshift import Trainshift
 from fitsnap3lib.io.sections.extras import Extras
@@ -43,10 +43,6 @@ def search(section):
     for cls in Section.__subclasses__():
         if cls.__name__.lower() == section.lower():
             instance = Section.__new__(cls)
-
-        # Added to allow a two-word section name with underscore
-        if cls.__name__ == "CHECK_TRAINING":
-            instance = Section.__new__(CheckTraining)
 
     if instance is None:
         raise IndexError(f"{section} was not found in FitSNAP sections")
