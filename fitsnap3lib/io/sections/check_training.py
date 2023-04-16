@@ -5,7 +5,7 @@ from fitsnap3lib.parallel_tools import ParallelTools
 pt = ParallelTools()
 
 
-class Training(Section):
+class CheckTraining(Section):
 
     def __init__(self, name, config, args):
         super().__init__(name, config, args)
@@ -14,7 +14,7 @@ class Training(Section):
         self.vars_per_mode = []
         self.types = None
 
-        if not config.has_section("TRAINING"):
+        if not config.has_section("CHECK_TRAINING"):
             self.delete()
             return
 
@@ -23,10 +23,10 @@ class Training(Section):
         #     else: pt.single_print(">>> Found unmatched variable in REFERENCE section of input: ",value_name)
 
         # Ensure mode input is valid
-        self.modes = self.get_value("TRAINING", "mode", "threshold").split()
+        self.modes = self.get_value("CHECK_TRAINING", "mode", "threshold").split()
         for mode in self.modes:
             if mode not in self.allowed_modes:
-                pt.single_print(f">>> Found error in TRAINING section of input: mode '{mode}' not recognized/implemented (current valid modes: threshold, reference)")
+                pt.single_print(f">>> Found error in CHECK_TRAINING section of input: mode '{mode}' not recognized/implemented (current valid modes: threshold, reference)")
                 return
 
         # Check values match atom types for 'threshold' and 'reference' modes
@@ -39,13 +39,13 @@ class Training(Section):
                 self.types = self.get_value("CUSTOM", "type", "H").split()
 
         # Get set of variables for each mode
-        for name, value in self._config.items("TRAINING"):
+        for name, value in self._config.items("CHECK_TRAINING"):
             if 'vars_mode' in name:
                 self.vars_per_mode.append(value.split())
         
         # Check that each mode has input for variables
         if len(self.modes) != len(self.vars_per_mode):
-            pt.single_print(f">>> Found error in TRAINING section of input: number of modes does not match number of vars_mode inputs (expected {len(self.modes)}, found {len(self.vars_per_mode)})")
+            pt.single_print(f">>> Found error in CHECK_TRAINING section of input: number of modes does not match number of vars_mode inputs (expected {len(self.modes)}, found {len(self.vars_per_mode)})")
             return
 
         # Check mode variables for expected values (currently only # atom types)
@@ -53,7 +53,7 @@ class Training(Section):
             vars_mode = self.vars_per_mode[i]
             vars_mode_name = f'vars_mode{i+1}'
             if len(vars_mode) != len(self.types):
-                pt.single_print(f">>> Found error in TRAINING section of input: mode '{mode}' has mismatched variables (expected {len(self.types)}, found {len(vars_mode)} in {vars_mode_name})")
+                pt.single_print(f">>> Found error in CHECK_TRAINING section of input: mode '{mode}' has mismatched variables (expected {len(self.types)}, found {len(vars_mode)} in {vars_mode_name})")
                 return
         
         # TODO implement graceful handling of errors consistent with other Sections 
