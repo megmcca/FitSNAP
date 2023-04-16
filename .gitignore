@@ -1,7 +1,5 @@
 # ignoring run example files
 examples/*
-
-# ignoring local example files
 megxamples/*
 
 # ignoring built test docs
