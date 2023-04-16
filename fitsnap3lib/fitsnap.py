@@ -120,9 +120,22 @@ class FitSnap:
             if (self.solver.linear):
                 self.calculator.extras()
 
-            if "CHECK_TRAINING" in self.config.sections.keys():
-                exit()
-                self.calculator.check_training_data()
+            if "CHECKTRAINING" in self.config.sections.keys():
+
+                # If section input was valid, begin analysis, otherwise warn user and ignore
+
+                if self.config.sections["CHECKTRAINING"].has_valid_input:
+                    modes = self.config.sections["CHECKTRAINING"].modes
+                    vars_per_mode = self.config.sections["CHECKTRAINING"].vars_per_mode
+                    print("Section CHECKTRAINING found in input file, extracting training data statistics (in beta!)")
+                    print("Current analysis mode(s) and variable(s):")
+                    for i, mode in enumerate(modes):
+                        print(f"\tMode/var_mode: {mode} {vars_per_mode[i]}")
+                    print("Processing data...")
+
+                    self.calculator.check_training_data()
+                else:
+                    print("Warning: input file section CHECKTRAINING is present, but has invalid parameters, ignoring for now")
 
         decorated_process_configs()
 

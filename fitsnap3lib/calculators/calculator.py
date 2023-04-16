@@ -301,131 +301,166 @@ class Calculator:
         #         ">>>Enable [SOLVER], detailed_errors = 1 to characterize the training/testing split of your output *.npy matricies")
 
     #@pt.rank_zero
-    def check_training_data(self):
+    def check_training_data(self, make_pretty_CSVs=True):
         @self.pt.rank_zero
         def decorated_check_training_data():
-            # Currently only run if the '-nofit_trainingcheck' flag is used in the command line.
+            # Only executes if [CHECKTRAINING] section present in FitSNAP input file.
             # Executed in fitsnap.py.
-            # 'Version 0' (this one) outputs two CSV files: one with statistical analysis performed on forces and energies 
+            # Outputs three CSV files in the CHECKTRAINING section of the input file: one with all statistical analysis, and two containing only files flagged as outliers in a long (all columns) and 'human-readable' (only group/filename columns) formats
+            # Analysis is performed on three levels: first on all (global) data, then subsets of data per group, then per config
+            # Data that exists outside of the mode of analysis (right now, 'threshold' and 'reference') is flagged as "funky"
+            # Per config data is checked against both global data (variable "is_funky_all") and within its own group (variable "is_funky_group")
 
-            print("Command line flag '-nofit_trainingcheck' used, checking training data statistics (in beta!)")
-            print("Current analysis type:  outside of 25% and 75% quartiles")
-            print("Processing data...")
-
+            # To access shared array
             pt = ParallelTools()
 
+            # Grab modes and mode variables from CHECKTRAINING section of input
+            modes = self.config.sections["CHECKTRAINING"].modes
+            vars_per_mode = self.config.sections["CHECKTRAINING"].vars_per_mode
+            vars_per_mode_units = self.config.sections["CHECKTRAINING"].vars_per_mode_units
+            vars_per_mode_labels = self.config.sections["CHECKTRAINING"].vars_per_mode_labels
+            vars_per_mode_columns = self.config.sections["CHECKTRAINING"].vars_per_mode_columns
+
             # Grab relevant data from shared arrays/dicts and create base dataframe
-            file_id_keys = 'Groups Configs Row_Type'.split()
+            file_id_keys = 'Groups Configs Row_Type Atom_Type'.split()
             df = pd.DataFrame.from_dict({key:pt.fitsnap_dict[key] for key in file_id_keys})
             df['truths'] = pt.shared_arrays['b'].array.tolist()
 
-            # Set up output
-            all_output = []
-            descr_cols = 'count mean std min 25th 50th 75th max'
-            all_header = f'Groups Configs Row_Type {descr_cols} is_funky_all is_funky_group'.split()
-            make_zero_if_tiny = lambda x: 0.0 if abs(x) < 10e-7 else x
-            
             # Get user checking/fitting choices from calculator section of input file  
             # Use only those choices when compiling data
             chosen_row_types_input = [bool(val) for val in [self.config.sections['CALCULATOR'].energy, self.config.sections['CALCULATOR'].force, self.config.sections['CALCULATOR'].stress]]
             chosen_row_types = [row_type for i, row_type in enumerate('Energy Force Stress'.split()) if chosen_row_types_input[i]]
 
-            for row_type in chosen_row_types:
-                # Collect data for entire dataset for row type
-                df_row_type = df.loc[df.Row_Type == row_type,:]
-                vals_row_type = df_row_type.truths.describe().values
-                mean_all = make_zero_if_tiny(vals_row_type[1])
-                std_all = vals_row_type[2]
-                lo_q_all = vals_row_type[4]
-                hi_q_all = vals_row_type[6]
-                is_funky_all = self._check_funkiness_quartiles(mean_all, lo_q_all, hi_q_all)
-                str_row = ' '.join([str(v) for v in vals_row_type])
-                data_row_all =  f'all all {row_type} {str_row}'.split() + [is_funky_all, False]
-                all_output.append(data_row_all)
+            # Set up output
+            all_output = []
+            all_mode_cols = []
+            for i, mode in enumerate(modes):
+                mode_cols = vars_per_mode_columns[i]
+                all_mode_cols.append(mode_cols)
 
-                # Per group/atom_type, also collect per-group quartile data to compare configs to
-                # group_quartiles = [] # df version
-                group_quartiles = {}
-                for label, subset in df_row_type.groupby('Groups'):
-                    vals_group = subset.truths.describe().values.tolist()
-                    mean_group, lo_q_group, hi_q_group = make_zero_if_tiny(vals_group[1]), vals_group[4], vals_group[6]
-                    # group_quartiles.append((name[0], name[1], lo_q_group, hi_q_group))
-                    group_quartiles[label] = (lo_q_group, hi_q_group)
-                    is_funky_all = self._check_funkiness_quartiles(mean_group, lo_q_all, hi_q_all)
-                    row_group = [label, 'all', row_type] + vals_group + [is_funky_all, False]
-                    all_output.append(row_group)
+            all_config_dfs = []
+            for i, mode in enumerate(modes):
+                vars_mode = vars_per_mode[i]
+                mode_cols = all_mode_cols[i]
+                if mode == 'threshold':
+                    all_config_dfs.append(self._get_mode_threshold_df(df, chosen_row_types, vars_mode, mode_cols))
+                if mode == 'reference':
+                    all_config_dfs.append(self._get_mode_reference_df(df, vars_mode, mode_cols))
+                
+            # TODO add option for user to add funky config flag to FitSNAP.df, for now creating new CSV/DataFrame
 
-                # Per config with comparison to group quartiles
-                for label, subset in df_row_type.groupby('Groups Configs'.split()):
-                    vals_config = subset.truths.describe().values.tolist()
-                    mean_config = make_zero_if_tiny(vals_config[1])
-                    is_funky_all = self._check_funkiness_quartiles(mean_config, lo_q_all, hi_q_all)
-                    lo_q_group, hi_q_group = group_quartiles[label[0]]
-                    is_funky_group = self._check_funkiness_quartiles(mean_config, lo_q_group, hi_q_group)
-                    row_config = [label[0], label[1], row_type] + vals_config + [is_funky_all, is_funky_group]
-                    all_output.append(row_config)
-                    print(row_config)
-                    exit()
-                del df_row_type
+            # Merge dataframe on indices
+            df_out = pd.concat(all_config_dfs,axis=1)
+            df_out.index.name = 'config'
 
-            # Consolidate
-            df_out = pd.DataFrame.from_records(all_output, columns=all_header)
-            total_configs = df_out[(df_out.Row_Type == 'Energy')&(df_out.Configs != 'all')].shape[0]
-
-            all_funky_ones = []
-            all_funky_counts = []
-            for row_type in chosen_row_types:
-                mask_funky_config = ((df_out.Row_Type == row_type)&(df_out.Configs != 'all'))&((df_out.is_funky_all)|(df_out.is_funky_group))
-                funky_ones = df_out.loc[mask_funky_config,:]
-                all_funky_ones.append(funky_ones)
-                all_funky_counts.append(funky_ones.shape[0])
-
-            df_funky = pd.concat(all_funky_ones)
-            df_funky_short = df_funky.loc[:,'Groups Configs Row_Type is_funky_all is_funky_group'.split()]
-
-            # Output some simple statistics
-            print("... analysis complete!")
-            print(f"Report on funky configs per fitting type (energy, force, stress),  out of {total_configs} total configs:")
+            # Start conditioning/cleaning output
+            # Flatten to allow search
+            flat_flag_cols = [item for subset in self.config.sections["CHECKTRAINING"].modes_flag_columns for item in subset]
+            flag_cols = [col for col in flat_flag_cols if col in df_out.columns]
+            if make_pretty_CSVs:
+                make_pretty_round_precision = 5
+                make_pretty_round_cols = [col for col in df_out.columns if col not in flag_cols]
+                df_out.loc[:, make_pretty_round_cols] = df_out.loc[:,make_pretty_round_cols].round(make_pretty_round_precision)
+                df_out.loc[:, flag_cols] = df_out.loc[:,flag_cols].astype(bool)
+                
             
-            for i, row_type in enumerate(chosen_row_types):
-                row_str = f'\t{row_type}: {all_funky_counts[i]}'
-                print(row_str)
-            
-            print("Groups with funky configs: ")
-            for funky_group in df_funky.Groups.unique():
-                print(f'\t{funky_group}')
+            # Flag outlier look at class vars in io/sections/checktraining.py for columns
+            df_bool = df_out.loc[:,flag_cols] != 0 # .any(axis=1)
+            df_short = df_out.loc[df_bool.any(axis=1),flag_cols]
+            df_funky = df_out.loc[df_short.index,:]
 
+            # Brief report
+            nconfigs = df_out.shape[0]
+            nfunky = df_short.shape[0]
+            print("Data processing complete.")
+            print(f"Of {nconfigs} configs analyzed, {nfunky} flagged as 'funky'")
+            print("Flagged configuration counts per variable: ")
+            print(df_bool.sum())
+            
+            # Write CSVs
             print("Writing CSVs...")
-            df_out_csv_all = 'NoFit_TrainingCheck_all.csv'
-            df_out_csv_funky = 'NoFit_TrainingCheck_funky.csv'
-            df_out_csv_funky_short = 'NoFit_TrainingCheck_funky-short.csv'
-            df_out.to_csv(df_out_csv_all, index=False)
-            df_funky.to_csv(df_out_csv_funky, index=False)
-            df_funky_short.to_csv(df_out_csv_funky_short, index=False)
+            mode_str = "-".join(modes)
+            df_out_csv_all = f'CheckTraining_{mode_str}_all-configs.csv'
+            df_out_csv_funky = f'CheckTraining_{mode_str}_funky-configs.csv'
+            df_out_csv_funky_short = f'CheckTraining_{mode_str}_short-funky-configs.csv'
+            df_out.to_csv(df_out_csv_all, index=True)
+            df_funky.to_csv(df_out_csv_funky, index=True)
+            df_short.to_csv(df_out_csv_funky_short, index=True)
             print("Data written, training set check complete")
             del df
         decorated_check_training_data()
 
-    def _check_funkiness_quartiles(self, mean, lo_q, hi_q, label=''):
-        # If the mean is not within the 2nd or 3rd quartiles of the queried aggregated data, it's funky (in a bad way)
-        if mean < lo_q or mean > hi_q:
-            return True
+    def _get_mode_threshold_df(self, df, row_types, thresh_vals, thresh_cols):
+        # Input: df, energy/force/stress rows, values of thresholds per row
+        # Output: dataframe from dictionary with threshold data per configuration
+        # If the row type is energy, flag values outside of threshold as-is
+        # If it's force or stress, take absolute values and flag those outside of threshold 
+        # Current column in io/sections/checkraining.py: ["thresh_E","is_above_E","thresh_F","outside_F","thresh_sigma","outside_sigma"]
+        mode_dict = {}
+        gb_cols = 'Groups Configs'.split()
+        final_cols = []
         
-        # Implement more sophisticated tests and return statements here
-        return False
+        # Get final column names for types of data checked
+        for i, thresh_val in enumerate(thresh_vals):
+            if thresh_val != None:
+                j, k = i*2, i*2+2
+                final_cols.extend(thresh_cols[j:k])
+        
+        # Dict format below is for new aggregated CheckTraining dataframe
+        for label, subset in df.groupby(gb_cols):
+            group_config = self._format_subset_label(label)
+            mode_data = []
+            for i, row_type in enumerate(row_types):
+                thresh_val = thresh_vals[i]
+                if thresh_val == None: continue            
+                if row_type == 'Energy':
+                    E = subset[subset.Row_Type == 'Energy'].truths.values[0]
+                    is_above = 1 if E > thresh_val else 0
+                    mode_data.extend([thresh_val, is_above])
+                else:
+                    list_bool = (subset[subset.Row_Type == row_type].truths.abs() > thresh_val).tolist()
+                    nvals, ntrue = len(list_bool), np.sum(list_bool)
+                    frac =  round(ntrue/nvals,5)
+                    is_true = 1 if ntrue > 0 else 0
+                    # mode_data.extend([thresh_val, frac]) # return fraction of force components
+                    mode_data.extend([thresh_val, is_true]) # return simply "true"
+            mode_dict[group_config] = mode_data
+
+        mode_df = pd.DataFrame.from_dict(mode_dict, orient='index',columns=final_cols)
+            
+        # # Dict format below could be appended to FitSNAP.df as-is
+        # for row_type in row_types:
+        #     if thresh_val == None:
+        #         continue
+        #     elif row_type == 'Energy':
+        #         mode_dict[thresh_col] = (df[df.Row_Type == 'Energy'].truths > thresh_val)
+        #     else:
+        #         mode_dict[thresh_col] = (df[df.Row_Type == row_type].truths.abs() > thresh_val)
+        # mode_df = pd.DataFrame(mode_dict)
+
+        return mode_df
+
+    def _get_mode_reference_df(self, df, ref_vals, ref_cols):
+        # Input: df, reference values per atom and a reference threshold for dE
+        # Output: dataframe from dictionary with threshold data per configuration
+        # Current column format in io/sections/checktraining.py: ["config_E","ref_E","dE","thresh_dE","is_above_dE"]
+        mode_dict = {}
+        per_atom_type_ref_E = ref_vals[:-1]
+        thresh_dE = ref_vals[-1]
+
+        for label, subset in df.groupby('Groups Configs'.split()):
+            group_config = self._format_subset_label(label)
+            config_E = subset[subset.Row_Type=='Energy'].truths.values[0]
+            atom_type_counts = (subset[subset.Row_Type=='Force'].Atom_Type.value_counts()/3).astype(int).values
+            atom_ref_energies = atom_type_counts*np.array(per_atom_type_ref_E)
+            ref_E = np.sum(atom_ref_energies)/np.sum(atom_type_counts)
+            dE = abs(config_E - ref_E)
+            is_above_dE = 1 if dE > thresh_dE else 0
+            mode_dict[group_config] = [config_E, ref_E, dE, thresh_dE, is_above_dE]
+
+        mode_df = pd.DataFrame.from_dict(mode_dict, orient = 'index', columns = ref_cols)
+        return mode_df
     
-    # def _check_funkiness_thresholds(self, val, lo_thresh, hi_thresh, label=''):
-    #     # TODO implement
-    #     if val < lo_thresh or val > hi_thresh:
-    #         return True
+    def _format_subset_label(self, group_config_tuple):
+        return "/".join(group_config_tuple)
 
-    #     # Implement more sophisticated tests and return statements here
-    #     return False
-
-    # def _check_funkiness_Edeltas(self, val, lo_thresh, hi_thresh, label=''):
-    #     # TODO implement - get expected per-atom energies (cohesive) from user (INPUT FILE) to shift distributions so that outliers look properly funky
-    #     if val < lo_thresh or val > hi_thresh:
-    #         return True
-
-    #     # Implement more sophisticated tests and return statements here
-    #     return False
