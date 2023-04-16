@@ -309,7 +309,7 @@ class Calculator:
             # 'Version 0' (this one) outputs two CSV files: one with statistical analysis performed on forces and energies 
 
             print("Command line flag '-nofit_trainingcheck' used, checking training data statistics (in beta!)")
-            print("Current analysis type: quartiles")
+            print("Current analysis type:  outside of 25% and 75% quartiles")
             print("Processing data...")
 
             pt = ParallelTools()
@@ -326,58 +326,82 @@ class Calculator:
             make_zero_if_tiny = lambda x: 0.0 if abs(x) < 10e-7 else x
             
             # Get user checking/fitting choices from calculator section of input file  
-            chosen_row_types = [bool(val) for val in [self.config.sections['CALCULATOR'].energy, self.config.sections['CALCULATOR'].force, self.config.sections['CALCULATOR'].stress]]
+            # Use only those choices when compiling data
+            chosen_row_types_input = [bool(val) for val in [self.config.sections['CALCULATOR'].energy, self.config.sections['CALCULATOR'].force, self.config.sections['CALCULATOR'].stress]]
+            chosen_row_types = [row_type for i, row_type in enumerate('Energy Force Stress'.split()) if chosen_row_types_input[i]]
 
-            for i, row_type in enumerate('Energy Force Stress'.split()):
-                # If energy, force, or stress data are chosen in input file, perform that analysis
-                if chosen_row_types[i]:
-                    # Collect data for entire dataset for row type
-                    df_row_type = df.loc[df.Row_Type == row_type,:]
-                    vals_row_type = df_row_type.truths.describe().values
-                    mean_all = make_zero_if_tiny(vals_row_type[1])
-                    std_all = vals_row_type[2]
-                    lo_q_all = vals_row_type[4]
-                    hi_q_all = vals_row_type[6]
-                    is_funky_all = self._check_funkiness_quartiles(mean_all, lo_q_all, hi_q_all)
-                    str_row = ' '.join([str(v) for v in vals_row_type])
-                    data_row_all =  f'all all {row_type} {str_row}'.split() + [is_funky_all, False]
-                    all_output.append(data_row_all)
+            for row_type in chosen_row_types:
+                # Collect data for entire dataset for row type
+                df_row_type = df.loc[df.Row_Type == row_type,:]
+                vals_row_type = df_row_type.truths.describe().values
+                mean_all = make_zero_if_tiny(vals_row_type[1])
+                std_all = vals_row_type[2]
+                lo_q_all = vals_row_type[4]
+                hi_q_all = vals_row_type[6]
+                is_funky_all = self._check_funkiness_quartiles(mean_all, lo_q_all, hi_q_all)
+                str_row = ' '.join([str(v) for v in vals_row_type])
+                data_row_all =  f'all all {row_type} {str_row}'.split() + [is_funky_all, False]
+                all_output.append(data_row_all)
 
-                    # Per group/atom_type, also collect per-group quartile data to compare configs to
-                    # group_quartiles = [] # df version
-                    group_quartiles = {}
-                    for label, subset in df_row_type.groupby('Groups'):
-                        vals_group = subset.truths.describe().values.tolist()
-                        mean_group, lo_q_group, hi_q_group = make_zero_if_tiny(vals_group[1]), vals_group[4], vals_group[6]
-                        # group_quartiles.append((name[0], name[1], lo_q_group, hi_q_group))
-                        group_quartiles[label] = (lo_q_group, hi_q_group)
-                        is_funky_all = self._check_funkiness_quartiles(mean_group, lo_q_all, hi_q_all)
-                        row_group = [label, 'all', row_type] + vals_group + [is_funky_all, False]
-                        all_output.append(row_group)
+                # Per group/atom_type, also collect per-group quartile data to compare configs to
+                # group_quartiles = [] # df version
+                group_quartiles = {}
+                for label, subset in df_row_type.groupby('Groups'):
+                    vals_group = subset.truths.describe().values.tolist()
+                    mean_group, lo_q_group, hi_q_group = make_zero_if_tiny(vals_group[1]), vals_group[4], vals_group[6]
+                    # group_quartiles.append((name[0], name[1], lo_q_group, hi_q_group))
+                    group_quartiles[label] = (lo_q_group, hi_q_group)
+                    is_funky_all = self._check_funkiness_quartiles(mean_group, lo_q_all, hi_q_all)
+                    row_group = [label, 'all', row_type] + vals_group + [is_funky_all, False]
+                    all_output.append(row_group)
 
-                    # Per config with comparison to group quartiles
-                    for label, subset in df_row_type.groupby('Groups Configs'.split()):
-                        vals_config = subset.truths.describe().values.tolist()
-                        mean_config = make_zero_if_tiny(vals_config[1])
-                        is_funky_all = self._check_funkiness_quartiles(mean_config, lo_q_all, hi_q_all)
-                        lo_q_group, hi_q_group = group_quartiles[label[0]]
-                        is_funky_group = self._check_funkiness_quartiles(mean_config, lo_q_group, hi_q_group)
-                        row_config = [label[0], label[1], row_type] + vals_config + [is_funky_all, is_funky_group]
-                        all_output.append(row_config)
-                    del df_row_type
+                # Per config with comparison to group quartiles
+                for label, subset in df_row_type.groupby('Groups Configs'.split()):
+                    vals_config = subset.truths.describe().values.tolist()
+                    mean_config = make_zero_if_tiny(vals_config[1])
+                    is_funky_all = self._check_funkiness_quartiles(mean_config, lo_q_all, hi_q_all)
+                    lo_q_group, hi_q_group = group_quartiles[label[0]]
+                    is_funky_group = self._check_funkiness_quartiles(mean_config, lo_q_group, hi_q_group)
+                    row_config = [label[0], label[1], row_type] + vals_config + [is_funky_all, is_funky_group]
+                    all_output.append(row_config)
+                    print(row_config)
+                    exit()
+                del df_row_type
 
             # Consolidate
             df_out = pd.DataFrame.from_records(all_output, columns=all_header)
-            df_configs = df_out.loc[(df_out.Configs != 'all'),:]
+            total_configs = df_out[(df_out.Row_Type == 'Energy')&(df_out.Configs != 'all')].shape[0]
 
-            # Output data 
+            all_funky_ones = []
+            all_funky_counts = []
+            for row_type in chosen_row_types:
+                mask_funky_config = ((df_out.Row_Type == row_type)&(df_out.Configs != 'all'))&((df_out.is_funky_all)|(df_out.is_funky_group))
+                funky_ones = df_out.loc[mask_funky_config,:]
+                all_funky_ones.append(funky_ones)
+                all_funky_counts.append(funky_ones.shape[0])
+
+            df_funky = pd.concat(all_funky_ones)
+            df_funky_short = df_funky.loc[:,'Groups Configs Row_Type is_funky_all is_funky_group'.split()]
+
+            # Output some simple statistics
             print("... analysis complete!")
+            print(f"Report on funky configs per fitting type (energy, force, stress),  out of {total_configs} total configs:")
+            
+            for i, row_type in enumerate(chosen_row_types):
+                row_str = f'\t{row_type}: {all_funky_counts[i]}'
+                print(row_str)
+            
+            print("Groups with funky configs: ")
+            for funky_group in df_funky.Groups.unique():
+                print(f'\t{funky_group}')
+
             print("Writing CSVs...")
             df_out_csv_all = 'NoFit_TrainingCheck_all.csv'
             df_out_csv_funky = 'NoFit_TrainingCheck_funky.csv'
-            df_out_md = 'NoFit_TrainingCheck_v0.md'
+            df_out_csv_funky_short = 'NoFit_TrainingCheck_funky-short.csv'
             df_out.to_csv(df_out_csv_all, index=False)
-            # df_funky.to_csv(df_out_csv_funky, index=False)
+            df_funky.to_csv(df_out_csv_funky, index=False)
+            df_funky_short.to_csv(df_out_csv_funky_short, index=False)
             print("Data written, training set check complete")
             del df
         decorated_check_training_data()
@@ -389,4 +413,19 @@ class Calculator:
         
         # Implement more sophisticated tests and return statements here
         return False
+    
+    # def _check_funkiness_thresholds(self, val, lo_thresh, hi_thresh, label=''):
+    #     # TODO implement
+    #     if val < lo_thresh or val > hi_thresh:
+    #         return True
 
+    #     # Implement more sophisticated tests and return statements here
+    #     return False
+
+    # def _check_funkiness_Edeltas(self, val, lo_thresh, hi_thresh, label=''):
+    #     # TODO implement - get expected per-atom energies (cohesive) from user (INPUT FILE) to shift distributions so that outliers look properly funky
+    #     if val < lo_thresh or val > hi_thresh:
+    #         return True
+
+    #     # Implement more sophisticated tests and return statements here
+    #     return False
