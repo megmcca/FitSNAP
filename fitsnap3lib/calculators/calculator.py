@@ -372,13 +372,13 @@ class Calculator:
             # Brief report
             nconfigs = df_out.shape[0]
             nfunky = df_short.shape[0]
-            print("Data processing complete.")
-            print(f"Of {nconfigs} configs analyzed, {nfunky} flagged as 'funky'")
-            print("Flagged configuration counts per variable: ")
-            print(df_bool.sum())
+            pt.single_print("Data processing complete.")
+            pt.single_print(f"Of {nconfigs} configs analyzed, {nfunky} flagged as 'funky'")
+            pt.single_print("Flagged configuration counts per variable: ")
+            pt.single_print(df_bool.sum())
             
             # Write CSVs
-            print("Writing CSVs...")
+            pt.single_print("Writing CSVs...")
             mode_str = "-".join(modes)
             df_out_csv_all = f'CheckTraining_{mode_str}_all-configs.csv'
             df_out_csv_funky = f'CheckTraining_{mode_str}_funky-configs.csv'
@@ -386,7 +386,7 @@ class Calculator:
             df_out.to_csv(df_out_csv_all, index=True)
             df_funky.to_csv(df_out_csv_funky, index=True)
             df_short.to_csv(df_out_csv_funky_short, index=True)
-            print("Data written, training set check complete")
+            pt.single_print("Data written, training set check complete")
             del df
         decorated_check_training_data()
 
