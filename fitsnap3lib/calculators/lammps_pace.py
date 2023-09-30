@@ -193,7 +193,7 @@ class LammpsPace(LammpsBase):
         self.shared_index_c = index_c
         self.shared_index_dgrad = index_dgrad
 
-    def _collect_lammps_single(self):
+    def __collect_lammps_single(self):
         num_atoms = self._data["NumAtoms"]
         num_types = self.config.sections['ACE'].numtypes
         n_coeff = self.config.sections['ACE'].ncoeff
@@ -348,9 +348,16 @@ class LammpsPace(LammpsBase):
         self.distributed_index = dindex
 
         return a,b,w
+
+    def _collect_lammps_single(self):
+        self._collect_lammps(single=True)
         
 
-    def _collect_lammps(self):
+    def _collect_lammps(self, single=False):
+
+        if single:
+            self.pt.single_print("!Single config processing not implemented yet!")
+            exit()
 
         num_atoms = self._data["NumAtoms"]
         num_types = self.config.sections['ACE'].numtypes
