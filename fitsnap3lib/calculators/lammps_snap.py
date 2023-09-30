@@ -216,6 +216,10 @@ class LammpsSnap(LammpsBase):
         self.shared_index_dgrad = index_dgrad
 
     def _collect_lammps_single(self):
+        a, b, w = self._collect_lammps(single=True)
+        return a, b, w
+
+    def __collect_lammps_single(self):
 
         num_atoms = self._data["NumAtoms"]
         num_types = self.config.sections['BISPECTRUM'].numtypes
@@ -384,7 +388,7 @@ class LammpsSnap(LammpsBase):
 
         return a,b,w
 
-    def _collect_lammps(self):
+    def _collect_lammps(self, single=False):
 
         num_atoms = self._data["NumAtoms"]
         num_types = self.config.sections['BISPECTRUM'].numtypes
@@ -396,12 +400,12 @@ class LammpsSnap(LammpsBase):
 
         # Extract positions
         lmp_pos = self._lmp.numpy.extract_atom_darray(name="x", nelem=num_atoms, dim=3)
+
         # Extract types
         lmp_types = self._lmp.numpy.extract_atom_iarray(name="type", nelem=num_atoms).ravel()
         lmp_volume = self._lmp.get_thermo("vol")
 
         # Extract SNAP data, including reference potential data
-
         bik_rows = 1
         if self.config.sections['BISPECTRUM'].bikflag:
             bik_rows = num_atoms
@@ -415,14 +419,41 @@ class LammpsSnap(LammpsBase):
         ncols_reference = 1
         ncols_snap = ncols_bispectrum + ncols_reference
         # index = pt.fitsnap_dict['a_indices'][self._i]
-        index = self.shared_index
+        index = self.shared_index if not single else 0
         dindex = self.distributed_index
 
         lmp_snap = _extract_compute_np(self._lmp, "snap", 0, 2, (nrows_snap, ncols_snap))
 
         if (np.isinf(lmp_snap)).any() or (np.isnan(lmp_snap)).any():
-            raise ValueError('Nan in computed data of file {} in group {}'.format(self._data["File"],
-                                                                                  self._data["Group"]))
+            raise ValueError('Nan in computed data of file {} in group {}'.format(self._data["File"], self._data["Group"]))
+
+        if not single:
+            dbm = "classic"
+        else:
+            dbm = "trtrick"
+            # Get individual A matrices for this configuration.
+
+            # If doing per-atom descriptors, we want a different shape (one less column).
+            if self.config.sections['BISPECTRUM'].bikflag:
+                nrows = 0
+                if self.config.sections['CALCULATOR'].energy:
+                    nrows += num_atoms
+                if self.config.sections['CALCULATOR'].force:
+                    nrows += 3*num_atoms
+                if self.config.sections['CALCULATOR'].stress:
+                    nrows += 6
+                nd = np.shape(lmp_snap)[1]-1
+                na = nrows
+            else:
+                na = np.shape(lmp_snap)[0]
+                nd = self.get_width()
+                if not self.config.sections["CALCULATOR"].stress:
+                    na -= 6
+                a = np.zeros((na, nd))
+                b = np.zeros(na)
+                w = np.zeros(na)
+                fsd = {"Row_Type":[-1]*(na),"Atom_I":[-1]*(na)}
+
         irow = 0
         bik_rows = 1
         if self.config.sections['BISPECTRUM'].bikflag:
@@ -445,9 +476,10 @@ class LammpsSnap(LammpsBase):
                     nstride //= num_types*num_types*num_types
                     if self.config.sections["BISPECTRUM"].wselfallflag:
                         b000sum0 *= num_types*num_types*num_types
+                # TODO compare positioning of bsum0 and bsum to PACE
                 b000sum = sum(b_sum_temp[0, ::nstride])
                 if abs(b000sum - b000sum0) < EPS:
-                    print("WARNING: Configuration has no SNAP neighbors")
+                     self.pt.single_print("WARNING: Configuration has no SNAP neighbors")
 
             if not self.config.sections["BISPECTRUM"].bzeroflag:
                 if self.config.sections['BISPECTRUM'].bikflag:
@@ -461,26 +493,37 @@ class LammpsSnap(LammpsBase):
                 b_sum_temp.shape = (num_types * n_coeff + num_types)
 
             # Get matrix of descriptors (A).
-            self.pt.shared_arrays['a'].array[index:index+bik_rows] = \
-                b_sum_temp * self.config.sections["BISPECTRUM"].blank2J[np.newaxis, :]
-            
-            ref_energy = lmp_snap[irow, icolref]
+            if not single:
+                self.pt.shared_arrays['a'].array[index:index+bik_rows] = \
+                    b_sum_temp * self.config.sections["BISPECTRUM"].blank2J[np.newaxis, :]
+                
+                ref_energy = lmp_snap[irow, icolref]
 
-            # Get vector of truths (b).
-            self.pt.shared_arrays['b'].array[index:index+bik_rows] = 0.0
-            self.pt.shared_arrays['b'].array[index] = (energy - ref_energy) / num_atoms
+                # Get vector of truths (b).
+                self.pt.shared_arrays['b'].array[index:index+bik_rows] = 0.0
+                self.pt.shared_arrays['b'].array[index] = (energy - ref_energy) / num_atoms
 
-            # Get weights (w).
-            self.pt.shared_arrays['w'].array[index] = self._data["eweight"]
-            self.pt.fitsnap_dict['Row_Type'][dindex:dindex + bik_rows] = ['Energy'] * nrows_energy
-            self.pt.fitsnap_dict['Atom_I'][dindex:dindex + bik_rows] = [int(i) for i in range(nrows_energy)]
+                # Get weights (w).
+                self.pt.shared_arrays['w'].array[index] = self._data["eweight"]
+                self.pt.fitsnap_dict['Row_Type'][dindex:dindex + bik_rows] = ['Energy'] * nrows_energy
+                self.pt.fitsnap_dict['Atom_I'][dindex:dindex + bik_rows] = [int(i) for i in range(nrows_energy)]
 
-            # create an atom types list for the energy rows, if bikflag=1
-            if self.config.sections['BISPECTRUM'].bikflag:
-                types_energy = [int(i) for i in lmp_types]
-                self.pt.fitsnap_dict['Atom_Type'][dindex:dindex + bik_rows] = types_energy
+                # create an atom types list for the energy rows, if bikflag=1
+                if self.config.sections['BISPECTRUM'].bikflag:
+                    types_energy = [int(i) for i in lmp_types]
+                    self.pt.fitsnap_dict['Atom_Type'][dindex:dindex + bik_rows] = types_energy
+                else:
+                    self.pt.fitsnap_dict['Atom_Type'][dindex:dindex + bik_rows] = [0]
             else:
-                self.pt.fitsnap_dict['Atom_Type'][dindex:dindex + bik_rows] = [0]
+                a[irow:irow+bik_rows] = b_sum_temp * self.config.sections["BISPECTRUM"].blank2J[np.newaxis, :]
+
+                # Get vector of truths (b).
+                ref_energy = lmp_snap[irow, icolref]
+                b[irow:irow+bik_rows] = 0.0
+                b[irow] = (energy - ref_energy) / num_atoms
+
+                # Get weights (w).
+                w[irow] = self._data["eweight"] if "eweight" in self._data else 1.0
 
             index += nrows_energy
             dindex += nrows_energy
@@ -494,27 +537,39 @@ class LammpsSnap(LammpsBase):
                 onehot_atoms = np.zeros((np.shape(db_atom_temp)[0], num_types, 1))
                 db_atom_temp = np.concatenate([onehot_atoms, db_atom_temp], axis=2)
                 db_atom_temp.shape = (np.shape(db_atom_temp)[0], num_types * n_coeff + num_types)
-            # Get matrix of descriptor derivatives (A).
-            self.pt.shared_arrays['a'].array[index:index+nrows_force] = \
-                np.matmul(db_atom_temp, np.diag(self.config.sections["BISPECTRUM"].blank2J))
+
+            if not single:
+                # Get matrix of descriptor derivatives (A).
+                self.pt.shared_arrays['a'].array[index:index+nrows_force] = \
+                    np.matmul(db_atom_temp, np.diag(self.config.sections["BISPECTRUM"].blank2J))
+                
+                ref_forces = lmp_snap[irow:irow + nrows_force, icolref]
+                # Get vector of true forces (b).
+                self.pt.shared_arrays['b'].array[index:index+nrows_force] = \
+                    self._data["Forces"].ravel() - ref_forces
+                
+                # Get vector of force weights (w).
+                self.pt.shared_arrays['w'].array[index:index+nrows_force] = \
+                    self._data["fweight"]
+                # Populate dictionaries.
+                self.pt.fitsnap_dict['Row_Type'][dindex:dindex + nrows_force] = ['Force'] * nrows_force
+                self.pt.fitsnap_dict['Atom_I'][dindex:dindex + nrows_force] = [int(np.floor(i/3)) for i in range(nrows_force)]
+                # create a types list for the force rows
+                types_force = [] 
+                for typ in lmp_types:
+                    for a in range(0,3):
+                        types_force.append(typ)
+                self.pt.fitsnap_dict['Atom_Type'][dindex:dindex + nrows_force] = types_force
+            else:
+                a[irow:irow+nrows_force] = np.matmul(db_atom_temp, np.diag(self.config.sections["BISPECTRUM"].blank2J)) 
             
-            ref_forces = lmp_snap[irow:irow + nrows_force, icolref]
-            # Get vector of true forces (b).
-            self.pt.shared_arrays['b'].array[index:index+nrows_force] = \
-                self._data["Forces"].ravel() - ref_forces
-            
-            # Get vector of force weights (w).
-            self.pt.shared_arrays['w'].array[index:index+nrows_force] = \
-                self._data["fweight"]
-            # Populate dictionaries.
-            self.pt.fitsnap_dict['Row_Type'][dindex:dindex + nrows_force] = ['Force'] * nrows_force
-            self.pt.fitsnap_dict['Atom_I'][dindex:dindex + nrows_force] = [int(np.floor(i/3)) for i in range(nrows_force)]
-            # create a types list for the force rows
-            types_force = [] 
-            for typ in lmp_types:
-                for a in range(0,3):
-                    types_force.append(typ)
-            self.pt.fitsnap_dict['Atom_Type'][dindex:dindex + nrows_force] = types_force
+                # Get vector of true forces (b).
+                ref_forces = lmp_snap[irow:irow + nrows_force, icolref]
+                b[irow:irow+nrows_force] = self._data["Forces"].ravel() - ref_forces
+                
+                # Get vector of force weights (w).
+                w[irow:irow+nrows_force] = self._data["fweight"] if "fweight" in self._data else 1.0
+
             index += nrows_force
             dindex += nrows_force
         irow += nrows_force
@@ -529,28 +584,53 @@ class LammpsSnap(LammpsBase):
                 vb_sum_temp.shape = (np.shape(vb_sum_temp)[0], num_types * n_coeff + num_types)
             
             # Get matrix of descriptor virials (A).
-            self.pt.shared_arrays['a'].array[index:index+ndim_virial] = \
-                np.matmul(vb_sum_temp, np.diag(self.config.sections["BISPECTRUM"].blank2J))
-            ref_stress = lmp_snap[irow:irow + nrows_virial, icolref]
-            # Get vector of true stresses (b).
-            self.pt.shared_arrays['b'].array[index:index+ndim_virial] = \
-                self._data["Stress"][[0, 1, 2, 1, 0, 0], [0, 1, 2, 2, 2, 1]].ravel() - ref_stress
-            # Get stress weights (w).
-            self.pt.shared_arrays['w'].array[index:index+ndim_virial] = \
-                self._data["vweight"]
-            # Populate dictionaries.
-            self.pt.fitsnap_dict['Row_Type'][dindex:dindex + ndim_virial] = ['Stress'] * ndim_virial
-            self.pt.fitsnap_dict['Atom_I'][dindex:dindex + ndim_virial] = [int(0)] * ndim_virial
-            self.pt.fitsnap_dict['Atom_Type'][dindex:dindex + ndim_virial] = [int(0)] * ndim_virial
+            if not single:
+                self.pt.shared_arrays['a'].array[index:index+ndim_virial] = \
+                    np.matmul(vb_sum_temp, np.diag(self.config.sections["BISPECTRUM"].blank2J))
+                ref_stress = lmp_snap[irow:irow + nrows_virial, icolref]
+                # Get vector of true stresses (b).
+                self.pt.shared_arrays['b'].array[index:index+ndim_virial] = \
+                    self._data["Stress"][[0, 1, 2, 1, 0, 0], [0, 1, 2, 2, 2, 1]].ravel() - ref_stress
+                # Get stress weights (w).
+                self.pt.shared_arrays['w'].array[index:index+ndim_virial] = \
+                    self._data["vweight"]
+                # Populate dictionaries.
+                self.pt.fitsnap_dict['Row_Type'][dindex:dindex + ndim_virial] = ['Stress'] * ndim_virial
+                self.pt.fitsnap_dict['Atom_I'][dindex:dindex + ndim_virial] = [int(0)] * ndim_virial
+                self.pt.fitsnap_dict['Atom_Type'][dindex:dindex + ndim_virial] = [int(0)] * ndim_virial
+            else:
+                a[irow:irow+ndim_virial] = np.matmul(vb_sum_temp, np.diag(self.config.sections["BISPECTRUM"].blank2J))
+
+                # Get vector of true stresses (b).
+                ref_stress = lmp_snap[irow:irow + nrows_virial, icolref]
+                b[irow:irow+ndim_virial] = self._data["Stress"][[0, 1, 2, 1, 0, 0], [0, 1, 2, 2, 2, 1]].ravel() - ref_stress
+
+                # Get stress weights (w).
+                w[irow:irow+ndim_virial] = self._data["vweight"] if "vweight" in self._data else 1.0
+
             index += ndim_virial
             dindex += ndim_virial
 
-        length = dindex - self.distributed_index
-        self.pt.fitsnap_dict['Groups'][self.distributed_index:dindex] = ['{}'.format(self._data['Group'])] * length
-        self.pt.fitsnap_dict['Configs'][self.distributed_index:dindex] = ['{}'.format(self._data['File'])] * length
-        self.pt.fitsnap_dict['Testing'][self.distributed_index:dindex] = [bool(self._data['test_bool'])] * length
+        if not single:
+            length = dindex - self.distributed_index
+            self.pt.fitsnap_dict['Groups'][self.distributed_index:dindex] = ['{}'.format(self._data['Group'])] * length
+            self.pt.fitsnap_dict['Configs'][self.distributed_index:dindex] = ['{}'.format(self._data['File'])] * length
+            self.pt.fitsnap_dict['Testing'][self.distributed_index:dindex] = [bool(self._data['test_bool'])] * length
+        else:
+            length = na
+            fsd['Groups'] = ['{}'.format(self._data['Group'])] * length
+            fsd['Configs'] = ['{}'.format(self._data['File'])] * length
+            fsd['Testing'] = [bool(self._data['test_bool'])] * length
+
         self.shared_index = index
         self.distributed_index = dindex
+
+        self.pt.single_print(f"+++++++++++ DEBUG {dbm} ++++++++")
+        self.pt.single_print(f"+++++++++++ DEBUG {dbm} ++++++++")
+        self.pt.single_print(f"+++++++++++ DEBUG {dbm} ++++++++")
+
+        if single:
+            return a, b, w
 
     def _collect_lammps_preprocess(self):
         num_atoms = self._data["NumAtoms"]
