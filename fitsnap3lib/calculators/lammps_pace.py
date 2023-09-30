@@ -350,7 +350,8 @@ class LammpsPace(LammpsBase):
         return a,b,w
 
     def _collect_lammps_single(self):
-        self._collect_lammps(single=True)
+        a, b, w = self._collect_lammps(single=True)
+        return a, b, w
         
 
     def _collect_lammps(self, single=False):        
@@ -376,6 +377,10 @@ class LammpsPace(LammpsBase):
         lmp_types = self._lmp.numpy.extract_atom_iarray(name="type", nelem=num_atoms).ravel()
         lmp_volume = self._lmp.get_thermo("vol")
 
+        # Read FitSNAP config data 
+        bzeroflag = self.config.sections['ACE'].bzeroflag
+        bikflag = self.config.sections['ACE'].bikflag
+
         # Extract pace data, including reference potential data
 
         nrows_energy = 1
@@ -388,7 +393,7 @@ class LammpsPace(LammpsBase):
         ncols_bispectrum = n_coeff * num_types
         ncols_reference = 1
         ncols_pace = ncols_bispectrum + ncols_reference
-        index = self.shared_index
+        index = self.shared_index if not single else 0
         dindex = self.distributed_index
         lmp_pace = _extract_compute_np(self._lmp, "pace", 0, 2, (nrows_pace, ncols_pace))
 
@@ -398,10 +403,23 @@ class LammpsPace(LammpsBase):
         if (np.isinf(lmp_pace)).any() or (np.isnan(lmp_pace)).any():
             raise ValueError('Nan in computed data of file {} in group {}'.format(self._data["File"],
                                                                                   self._data["Group"]))
+        
+        if single:
+            nd = self.get_width()
+            na = np.shape(lmp_pace)[0]
+            if not self.config.sections["CALCULATOR"].stress:
+                na -= 6
+            a = np.zeros((na, nd))
+            b = np.zeros(na)
+            w = np.zeros(na)
+
+            # self.pt.single_print("local a", a.shape)
+            # self.pt.single_print("local b", b.shape)
+            # self.pt.single_print("local w", w.shape)
 
         irow = 0
         bik_rows = 1
-        if self.config.sections['ACE'].bikflag:
+        if bikflag:
             bik_rows = num_atoms
         icolref = ncols_bispectrum
         if self.config.sections["CALCULATOR"].energy:
@@ -415,8 +433,8 @@ class LammpsPace(LammpsBase):
             b000sum0 = 0.0
             nstride = n_coeff
             b000sum = sum(b_sum_temp[::nstride])
-            if not self.config.sections['ACE'].bikflag:
-                if not self.config.sections["ACE"].bzeroflag:
+            if not bikflag:
+                if not bzeroflag:
                     b000sum0 = 1.0
                     if (abs(b000sum - b000sum0) < EPS): 
                         self.pt.single_print("WARNING: Configuration has no PACE neighbors")
@@ -450,15 +468,16 @@ class LammpsPace(LammpsBase):
         if self.config.sections["CALCULATOR"].force:
             db_atom_temp = lmp_pace[irow:irow + nrows_force, :ncols_bispectrum]
             db_atom_temp.shape = (num_atoms * ndim_force, n_coeff * num_types)
-            if not self.config.sections["ACE"].bzeroflag:
+            if not bzeroflag:
                 db_atom_temp.shape = (np.shape(db_atom_temp)[0], num_types, n_coeff)
                 onehot_atoms = np.zeros((np.shape(db_atom_temp)[0], num_types, 1))
                 db_atom_temp = np.concatenate([onehot_atoms, db_atom_temp], axis=2)
                 db_atom_temp.shape = (np.shape(db_atom_temp)[0], num_types * n_coeff + num_types)
-                self.pt.shared_arrays['a'].array[index:index+num_atoms * ndim_force] = \
-                    np.matmul(db_atom_temp, np.diag(self.config.sections["ACE"].blank2J))
-                ref_forces = lmp_pace[irow:irow + nrows_force, icolref]
+                
                 if not single:
+                    self.pt.shared_arrays['a'].array[index:index+num_atoms * ndim_force] = \
+                    np.matmul(db_atom_temp, np.diag(self.config.sections["ACE"].blank2J))
+                    ref_forces = lmp_pace[irow:irow + nrows_force, icolref]
                     self.pt.shared_arrays['b'].array[index:index+num_atoms * ndim_force] = \
                         self._data["Forces"].ravel() - ref_forces
                     self.pt.shared_arrays['w'].array[index:index+num_atoms * ndim_force] = \
@@ -509,6 +528,17 @@ class LammpsPace(LammpsBase):
 
         self.shared_index = index
         self.distributed_index = dindex
+        
+        # print(a)
+        # print(b)
+        # print(w)
+        
+        # print(a.shape)
+        # print(b.shape)
+        # print(w.shape)
+
+        if single:
+            return a, b, w
 
     def _collect_lammps_preprocess(self):
         num_atoms = self._data["NumAtoms"]
@@ -531,7 +561,7 @@ class LammpsPace(LammpsBase):
         # extract pace data, including reference potential data
 
         bik_rows = 1
-        if self.config.sections['ACE'].bikflag:
+        if bikflag:
             bik_rows = num_atoms
         nrows_energy = bik_rows
         ndim_force = 3
