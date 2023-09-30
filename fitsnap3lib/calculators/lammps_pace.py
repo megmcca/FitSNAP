@@ -353,11 +353,14 @@ class LammpsPace(LammpsBase):
         self._collect_lammps(single=True)
         
 
-    def _collect_lammps(self, single=False):
-
-        if single:
-            self.pt.single_print("!Single config processing not implemented yet!")
-            exit()
+    def _collect_lammps(self, single=False):        
+        # self.pt.single_print('a', self.pt.shared_arrays['a'].array.shape)
+        # self.pt.single_print('b', self.pt.shared_arrays['b'].array.shape)
+        # self.pt.single_print('w', self.pt.shared_arrays['w'].array.shape)
+        # self.pt.single_print('fs_dict type', type(self.pt.fitsnap_dict))
+        # self.pt.single_print('fs_dict len', len(self.pt.fitsnap_dict))
+        # self.pt.single_print('fs_dict keys', self.pt.fitsnap_dict.keys())
+        # exit()
 
         num_atoms = self._data["NumAtoms"]
         num_types = self.config.sections['ACE'].numtypes
@@ -425,14 +428,21 @@ class LammpsPace(LammpsBase):
                 onehot_atoms /= len(self._data["AtomTypes"])
                 b_sum_temp = np.concatenate((onehot_atoms, b_sum_temp), axis=1)
                 b_sum_temp.shape = (num_types * n_coeff + num_types)
-            self.pt.shared_arrays['a'].array[index] = b_sum_temp * self.config.sections["ACE"].blank2J
             #print(b_sum_temp * self.config.sections["ACE"].blank2J)
             #assert(False)
             ref_energy = lmp_pace[irow, icolref]
-            self.pt.shared_arrays['b'].array[index] = (energy - ref_energy) / num_atoms
-            self.pt.shared_arrays['w'].array[index] = self._data["eweight"]
-            self.pt.fitsnap_dict['Row_Type'][dindex:dindex + bik_rows] = ['Energy'] * nrows_energy
-            self.pt.fitsnap_dict['Atom_I'][dindex:dindex + bik_rows] = [int(i) for i in range(nrows_energy)]
+
+            if not single:
+                self.pt.shared_arrays['a'].array[index] = b_sum_temp * self.config.sections["ACE"].blank2J
+                self.pt.shared_arrays['b'].array[index] = (energy - ref_energy) / num_atoms
+                self.pt.shared_arrays['w'].array[index] = self._data["eweight"]
+                self.pt.fitsnap_dict['Row_Type'][dindex:dindex + bik_rows] = ['Energy'] * nrows_energy
+                self.pt.fitsnap_dict['Atom_I'][dindex:dindex + bik_rows] = [int(i) for i in range(nrows_energy)]
+            else:
+                a[irow:irow+bik_rows] = b_sum_temp * self.config.sections["ACE"].blank2J[np.newaxis, :]
+                ref_energy = lmp_pace[irow, icolref]
+                b[irow] = (energy - ref_energy) / num_atoms
+                w[irow] = self._data["eweight"] if "eweight" in self._data else 1.0     
             index += nrows_energy
             dindex += nrows_energy
         irow += nrows_energy
@@ -445,15 +455,21 @@ class LammpsPace(LammpsBase):
                 onehot_atoms = np.zeros((np.shape(db_atom_temp)[0], num_types, 1))
                 db_atom_temp = np.concatenate([onehot_atoms, db_atom_temp], axis=2)
                 db_atom_temp.shape = (np.shape(db_atom_temp)[0], num_types * n_coeff + num_types)
-            self.pt.shared_arrays['a'].array[index:index+num_atoms * ndim_force] = \
-                np.matmul(db_atom_temp, np.diag(self.config.sections["ACE"].blank2J))
-            ref_forces = lmp_pace[irow:irow + nrows_force, icolref]
-            self.pt.shared_arrays['b'].array[index:index+num_atoms * ndim_force] = \
-                self._data["Forces"].ravel() - ref_forces
-            self.pt.shared_arrays['w'].array[index:index+num_atoms * ndim_force] = \
-                self._data["fweight"]
-            self.pt.fitsnap_dict['Row_Type'][dindex:dindex + nrows_force] = ['Force'] * nrows_force
-            self.pt.fitsnap_dict['Atom_I'][dindex:dindex + nrows_force] = [int(np.floor(i/3)) for i in range(nrows_force)]
+                self.pt.shared_arrays['a'].array[index:index+num_atoms * ndim_force] = \
+                    np.matmul(db_atom_temp, np.diag(self.config.sections["ACE"].blank2J))
+                ref_forces = lmp_pace[irow:irow + nrows_force, icolref]
+                if not single:
+                    self.pt.shared_arrays['b'].array[index:index+num_atoms * ndim_force] = \
+                        self._data["Forces"].ravel() - ref_forces
+                    self.pt.shared_arrays['w'].array[index:index+num_atoms * ndim_force] = \
+                        self._data["fweight"]
+                    self.pt.fitsnap_dict['Row_Type'][dindex:dindex + nrows_force] = ['Force'] * nrows_force
+                    self.pt.fitsnap_dict['Atom_I'][dindex:dindex + nrows_force] = [int(np.floor(i/3)) for i in range(nrows_force)]
+                else:
+                    a[irow:irow+num_atoms * ndim_force] = np.matmul(db_atom_temp, np.diag(self.config.sections["ACE"].blank2J))
+                    ref_forces = lmp_pace[irow:irow + nrows_force, icolref]
+                    b[irow:irow+num_atoms * ndim_force] = self._data["Forces"].ravel() - ref_forces
+                    w[irow:irow+nrows_force] = self._data["fweight"] if "fweight" in self._data else 1.0
             index += nrows_force
             dindex += nrows_force
         irow += nrows_force
@@ -466,23 +482,31 @@ class LammpsPace(LammpsBase):
                 onehot_atoms = np.zeros((np.shape(vb_sum_temp)[0], num_types, 1))
                 vb_sum_temp = np.concatenate([onehot_atoms, vb_sum_temp], axis=2)
                 vb_sum_temp.shape = (np.shape(vb_sum_temp)[0], num_types * n_coeff + num_types)
-            self.pt.shared_arrays['a'].array[index:index+ndim_virial] = \
+
+            if not single:
+                self.pt.shared_arrays['a'].array[index:index+ndim_virial] = \
                 np.matmul(vb_sum_temp, np.diag(self.config.sections["ACE"].blank2J))
-            ref_stress = lmp_pace[irow:irow + nrows_virial, icolref]
-            self.pt.shared_arrays['b'].array[index:index+ndim_virial] = \
-                self._data["Stress"][[0, 1, 2, 1, 0, 0], [0, 1, 2, 2, 2, 1]].ravel() - ref_stress
-            self.pt.shared_arrays['w'].array[index:index+ndim_virial] = \
-                self._data["vweight"]
-            self.pt.fitsnap_dict['Row_Type'][dindex:dindex + ndim_virial] = ['Stress'] * ndim_virial
-            self.pt.fitsnap_dict['Atom_I'][dindex:dindex + ndim_virial] = [int(0)] * ndim_virial
+                ref_stress = lmp_pace[irow:irow + nrows_virial, icolref]
+                self.pt.shared_arrays['b'].array[index:index+ndim_virial] = \
+                    self._data["Stress"][[0, 1, 2, 1, 0, 0], [0, 1, 2, 2, 2, 1]].ravel() - ref_stress
+                self.pt.shared_arrays['w'].array[index:index+ndim_virial] = \
+                    self._data["vweight"]
+                self.pt.fitsnap_dict['Row_Type'][dindex:dindex + ndim_virial] = ['Stress'] * ndim_virial
+                self.pt.fitsnap_dict['Atom_I'][dindex:dindex + ndim_virial] = [int(0)] * ndim_virial
+            else:
+                a[irow:irow+ndim_virial] = np.matmul(vb_sum_temp, np.diag(self.config.sections["ACE"].blank2J))
+                ref_stress = lmp_pace[irow:irow + nrows_virial, icolref]
+                b[irow:irow+ndim_virial] = self._data["Stress"][[0, 1, 2, 1, 0, 0], [0, 1, 2, 2, 2, 1]].ravel() - ref_stress
+                w[irow:irow+ndim_virial] = self._data["vweight"] if "vweight" in self._data else 1.0
             index += ndim_virial
             dindex += ndim_virial
+        
+        if not single:
+            length = dindex - self.distributed_index
+            self.pt.fitsnap_dict['Groups'][self.distributed_index:dindex] = ['{}'.format(self._data['Group'])] * length
+            self.pt.fitsnap_dict['Configs'][self.distributed_index:dindex] = ['{}'.format(self._data['File'])] * length
+            self.pt.fitsnap_dict['Testing'][self.distributed_index:dindex] = [bool(self._data['test_bool'])] * length
 
-        length = dindex - self.distributed_index
-
-        self.pt.fitsnap_dict['Groups'][self.distributed_index:dindex] = ['{}'.format(self._data['Group'])] * length
-        self.pt.fitsnap_dict['Configs'][self.distributed_index:dindex] = ['{}'.format(self._data['File'])] * length
-        self.pt.fitsnap_dict['Testing'][self.distributed_index:dindex] = [bool(self._data['test_bool'])] * length
         self.shared_index = index
         self.distributed_index = dindex
 
