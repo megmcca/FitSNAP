@@ -43,7 +43,8 @@ class SVD(Solver):
                 w = pt.shared_arrays['w'].array[training]
                 aw, bw = w[:, np.newaxis] * pt.shared_arrays['a'].array[training], w * pt.shared_arrays['b'].array[training]
             else:
-                aw, bw = w[:, np.newaxis] * a[training], w * b[training]
+                w_training = w[training]
+                aw, bw = w_training[:, np.newaxis] * a[training], w_training * b[training]
 
             if 'EXTRAS' in self.config.sections and self.config.sections['EXTRAS'].apply_transpose:
                 if np.linalg.cond(aw)**2 < 1 / fi.epsilon:

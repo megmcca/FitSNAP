@@ -25,7 +25,8 @@ class ANL(Solver):
                 w = pt.shared_arrays['w'].array[training]
                 aw, bw = w[:, np.newaxis] * pt.shared_arrays['a'].array[training], w * pt.shared_arrays['b'].array[training]
             else:
-                aw, bw = w[:, np.newaxis] * a[training], w * b[training]
+                w_training = w[training]
+                aw, bw = w_training[:, np.newaxis] * a[training], w_training * b[training]
 
     #       TODO: See if the transpose trick works or is nonsense when feeding into the UQ algos (probably nonsense)
             if config.sections['EXTRAS'].apply_transpose:
